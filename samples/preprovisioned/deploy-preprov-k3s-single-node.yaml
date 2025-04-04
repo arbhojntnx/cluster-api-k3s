@@ -1,0 +1,136 @@
+---
+apiVersion: kommander.mesosphere.io/v1beta1
+kind: KommanderCluster
+metadata:
+  labels:
+    konvoy.d2iq.io/cluster-name: ${CLUSTER_NAME}
+  name: ${CLUSTER_NAME}
+  namespace: ${WORKSPACE_NAMESPACE}
+spec:
+  clusterRef:
+    capiCluster:
+      name: ${CLUSTER_NAME}
+      namespace: ${WORKSPACE_NAMESPACE}
+  ingress:
+    hostname: ${INGRESS_HOST}
+  kubeconfigRef:
+    name: ${CLUSTER_NAME}-kubeconfig
+  namespaceRef:
+    name: ${WORKSPACE_NAMESPACE}
+---
+apiVersion: infrastructure.cluster.konvoy.d2iq.io/v1alpha1
+kind: PreprovisionedInventory
+metadata:
+  name: ${CLUSTER_NAME}-control-plane
+  namespace: ${WORKSPACE_NAMESPACE}
+  labels:
+    cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+    clusterctl.cluster.x-k8s.io/move: ""
+spec:
+  hosts:
+    - address: ${CONTROL_PLANE_0_ADDRESS}
+  sshConfig:
+    port: 22
+    user: ${SSH_USER}
+    privateKeyRef:
+      name: ${SSH_PRIVATE_KEY_SECRET_NAME}
+      namespace: ${WORKSPACE_NAMESPACE}
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  labels:
+    konvoy.d2iq.io/cluster-name: ${CLUSTER_NAME}
+    konvoy.d2iq.io/provider: preprovisioned
+    konvoy.d2iq.io/loadbalancer: metallb  
+    cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME} 
+  name: ${CLUSTER_NAME}
+  namespace: ${WORKSPACE_NAMESPACE}
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+    services:
+      cidrBlocks:
+      - 10.96.0.0/12
+  controlPlaneEndpoint:
+    host: ""
+    port: 0
+  controlPlaneRef:
+  controlPlaneRef:
+    kind: KThreesControlPlane
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    name: ${CLUSTER_NAME}-control-plane      
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.konvoy.d2iq.io/v1alpha1
+    kind: PreprovisionedCluster
+    name: ${CLUSTER_NAME}
+    namespace: ${WORKSPACE_NAMESPACE}
+---
+apiVersion: infrastructure.cluster.konvoy.d2iq.io/v1alpha1
+kind: PreprovisionedCluster
+metadata:
+  name: ${CLUSTER_NAME}
+  namespace: ${WORKSPACE_NAMESPACE}
+  labels:
+    cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}
+spec:
+  controlPlaneEndpoint:
+    host: ${CONTROL_PLANE_ENDPOINT_HOST} 
+    port: 6443
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: KThreesControlPlane
+metadata:
+  name: ${CLUSTER_NAME}-control-plane
+  namespace: ${WORKSPACE_NAMESPACE}
+  labels:
+    cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}    
+spec:
+  kthreesConfigSpec:
+    serverConfig:
+      disableComponents:
+      - traefik 
+    postK3sCommands:
+    - k3s kubectl taint node --all node.cloudprovider.kubernetes.io/uninitialized=true:NoSchedule- > /dev/null 2>/dev/null  || true
+    files:
+    - content: |
+        ---
+        apiVersion: kubeadm.k8s.io/v1beta4
+        kind: InitConfiguration
+        localAPIEndpoint: {}
+        nodeRegistration:
+          criSocket: unix:///run/containerd/containerd.sock
+          imagePullPolicy: IfNotPresent
+          kubeletExtraArgs:
+          - name: cloud-provider
+            value: ""
+          - name: provider-id
+            value: '{{ .ProviderID }}'
+          taints: null
+      path: /run/kubeadm/kubeadm.yaml
+      owner: root:root
+      permissions: '0640'        
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.konvoy.d2iq.io/v1alpha1
+      kind: PreprovisionedMachineTemplate
+      name: ${CLUSTER_NAME}-control-plane
+      namespace: ${WORKSPACE_NAMESPACE}
+  replicas: 1
+  version: "${KUBERNETES_VERSION}"
+---
+apiVersion: infrastructure.cluster.konvoy.d2iq.io/v1alpha1
+kind: PreprovisionedMachineTemplate
+metadata:
+  name: ${CLUSTER_NAME}-control-plane
+  namespace: ${WORKSPACE_NAMESPACE}
+  labels:
+    cluster.x-k8s.io/cluster-name: ${CLUSTER_NAME}    
+spec:
+  template:
+    spec:
+      inventoryRef:
+        name: ${CLUSTER_NAME}-control-plane
+        namespace: ${WORKSPACE_NAMESPACE}
